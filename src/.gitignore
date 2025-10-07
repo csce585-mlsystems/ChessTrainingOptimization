@@ -1,0 +1,11 @@
+# Ignore ONNX runtime libraries
+onnxruntime/
+onnxruntime-linux-x64-gpu-1.23.0/
+
+# Ignore compiled binaries
+*.so
+*.pyd
+
+# Python cache
+__pycache__/
+*.pyc
