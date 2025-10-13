@@ -16,4 +16,6 @@ GameResult runSelfPlayGame(int searchDepth, bool verbose);
 // Converts outcome enum to string
 std::string outcomeToString(Outcome o);
 
+int evaluateFEN(const std::string& fen, int depth);
+
 } // namespace chess

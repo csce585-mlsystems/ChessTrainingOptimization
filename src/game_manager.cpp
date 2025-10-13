@@ -2,6 +2,8 @@
 #include "chess_engine.hpp"
 #include <vector>
 #include <iostream>
+#include <sstream>
+
 
 namespace chess {
 
@@ -110,24 +112,93 @@ std::string outcomeToString(Outcome o) {
     }
 }
 
+int evaluateFEN(const std::string& fen, int depth) {
+    Engine engine(depth);
+    std::cout << "Evaluating FEN: " << fen << " at depth " << depth << std::endl;
+    Position pos;
 
-}
+    // --- Parse FEN ---
+    std::istringstream ss(fen);
+    std::string boardPart, sideToMove, castling, enpassant;
+    int halfmoveClock = 0, fullmoveNumber = 1;
+    ss >> boardPart >> sideToMove >> castling >> enpassant >> halfmoveClock >> fullmoveNumber;
 
+    // Reset bitboards
+    for (int i = 0; i < 12; ++i) pos.bb[i] = 0ULL;
 
-/*
-int main() {
-    using namespace chess;
-    auto result = runSelfPlayGame(3, true);
-    std::cout << "Game finished with "
-              << result.positions.size() << " positions.\n";
-    std::cout << "Outcome: " << static_cast<int>(result.outcome) << "\n";
-
-    for(Position p : result.positions){
-        std::vector<float> tensor = p.toTensor();
+    int square = 56; // rank 8, file a
+    for (char c : boardPart) {
+        if (c == '/') {
+            square -= 16;
+        } else if (isdigit(c)) {
+            square += (c - '0');
+        } else {
+            switch (c) {
+                case 'P': pos.bb[W_PAWN]   |= 1ULL << square; break;
+                case 'N': pos.bb[W_KNIGHT] |= 1ULL << square; break;
+                case 'B': pos.bb[W_BISHOP] |= 1ULL << square; break;
+                case 'R': pos.bb[W_ROOK]   |= 1ULL << square; break;
+                case 'Q': pos.bb[W_QUEEN]  |= 1ULL << square; break;
+                case 'K': pos.bb[W_KING]   |= 1ULL << square; break;
+                case 'p': pos.bb[B_PAWN]   |= 1ULL << square; break;
+                case 'n': pos.bb[B_KNIGHT] |= 1ULL << square; break;
+                case 'b': pos.bb[B_BISHOP] |= 1ULL << square; break;
+                case 'r': pos.bb[B_ROOK]   |= 1ULL << square; break;
+                case 'q': pos.bb[B_QUEEN]  |= 1ULL << square; break;
+                case 'k': pos.bb[B_KING]   |= 1ULL << square; break;
+                default: break;
+            }
+            square++;
+        }
     }
-    return 0;
+
+    // --- Side to move ---
+    pos.whiteToMove = (sideToMove == "w");
+
+    // --- Castling rights ---
+    pos.castlingRights = 0;
+    if (castling.find('K') != std::string::npos) pos.castlingRights |= Position::WK_CASTLE_MASK;
+    if (castling.find('Q') != std::string::npos) pos.castlingRights |= Position::WQ_CASTLE_MASK;
+    if (castling.find('k') != std::string::npos) pos.castlingRights |= Position::BK_CASTLE_MASK;
+    if (castling.find('q') != std::string::npos) pos.castlingRights |= Position::BQ_CASTLE_MASK;
+
+    // --- En passant square ---
+    if (enpassant != "-" && enpassant.size() == 2) {
+        int file = enpassant[0] - 'a';
+        int rank = enpassant[1] - '1';
+        pos.epSquare = rank * 8 + file;
+    } else {
+        pos.epSquare = -1;
+    }
+
+    pos.halfmoveClock = halfmoveClock;
+    pos.fullmoveNumber = fullmoveNumber;
+    pos.updateOccupancies();
+    pos.syncMailboxFromBitboards();
+    pos.computeAndSetHash();
+
+    // --- Prepare search bookkeeping ---
+    std::vector<uint64_t> search_path_history;
+    std::vector<uint64_t> game_history_hashes;
+
+    // --- Perform search using negamax ---
+    int alpha = -300000;
+    int beta =  300000;
+    int score = engine.negamax(pos, depth, alpha, beta, search_path_history, game_history_hashes, true);
+    //int score = engine.findBestMove(pos, game_history_hashes);
+
+
+    // --- Debug Output ---
+    std::cout << "FEN: " << fen << "\n";
+    std::cout << "White to move: " << pos.whiteToMove << "\n";
+    std::cout << "Depth: " << depth << "\n";
+    std::cout << "Eval score: " << score << " (positive = White better, negative = Black better)\n";
+
+    return score;
 }
 
 
-*/
+
+}
+
 

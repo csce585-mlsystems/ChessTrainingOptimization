@@ -92,6 +92,7 @@ struct Position {
     int halfmoveClock = 0;
     int fullmoveNumber = 1;
     uint64_t currentHash = 0;
+    mutable std::vector<float> tensorData;
 
     Position();
     void updateOccupancies();
@@ -137,6 +138,11 @@ public:
     uint64_t getHashForPosition(const Position& pos);
     uint64_t perft(Position& pos, int depth);
     long getNodesVisited() const;
+    float evaluateWithModel(const Position& p);
+    int negamax(Position& p, int depth, int alpha, int beta,
+                std::vector<uint64_t>& search_path_history,
+                const std::vector<uint64_t>& game_history_hashes,
+                bool isRootNode);
 
 private:
     // Helpers
@@ -154,14 +160,9 @@ private:
     uint64_t perft_recursive(Position& p, int depth);
     Bitboard get_attackers(const Position& p, int sq, bool by_white) const;
 
-    int negamax(Position& p, int depth, int alpha, int beta,
-                std::vector<uint64_t>& search_path_history,
-                const std::vector<uint64_t>& game_history_hashes,
-                bool isRootNode);
 
     bool loadModel(const std::string& path);
     std::unique_ptr<Ort::Session> onnx_session;
-    float evaluateWithModel(const Position& p);
 
     // Members
     int searchDepth;

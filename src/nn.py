@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.optim as optim
 import time
 import random
+from collections import deque
 
 # ----------------------------
 # ⚙️ Device Configuration
@@ -39,20 +40,15 @@ class ValueNetwork(nn.Module):
         self.optimizer = optim.Adam(self.parameters(), lr=lr)
 
     def forward(self, x):
-        if x.ndim == 4:
-            x = x.permute(0, 3, 1, 2)  # (N, 12, 8, 8)
         x = self.conv(x)
         x = x.reshape(x.size(0), -1)
         return self.fc(x)
 
-    def train_model(self, X, y, epochs=1, batch_size=64, repetition_mask=False):
+    def train_model(self, X, y, epochs=1, batch_size=64):
         self.train()
-
-        # Convert inputs
         X_tensor = torch.tensor(X, dtype=torch.float32)
         y_tensor = torch.tensor(y, dtype=torch.float32).unsqueeze(1)
 
-        # Build dataset
         dataset = torch.utils.data.TensorDataset(X_tensor, y_tensor)
         loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
@@ -61,29 +57,81 @@ class ValueNetwork(nn.Module):
             for batch_x, batch_y in loader:
                 batch_x, batch_y = batch_x.to(device), batch_y.to(device)
                 self.optimizer.zero_grad()
-
                 out = self.forward(batch_x)
-                raw_loss = self.criterion(out, batch_y)
-
-                # Apply weight to entire batch based on repetition flag
-                weight = 0.25 if repetition_mask else 2.50
-                loss = (raw_loss * weight).mean()
-
+                loss = self.criterion(out, batch_y).mean()
                 loss.backward()
                 self.optimizer.step()
                 total_loss += loss.item()
+            print(f"🧮 Epoch {epoch+1}, Loss: {total_loss:.6f}")
+        
 
     def save(self, path="model.pt"):
         torch.save(self.state_dict(), path)
         print(f"💾 Saved model weights to {path}")
 
 # ----------------------------
-# 헬 Helper Function
+# 💾 Replay Buffer Management (Weighted)
+# ----------------------------
+REPLAY_FILE = "replay_buffer_v2.npz"
+REPLAY_MAXLEN = 200_000
+
+class ReplayBuffer:
+    def __init__(self, maxlen=REPLAY_MAXLEN):
+        self.buffer = deque(maxlen=maxlen)
+
+    def add(self, X, y, outcome_code):
+        """
+        Adds positions and their labels to the buffer with a priority weight.
+        """
+        # Weight important positions more (checkmates and losses > draws)
+        if outcome_code in (1.0, -1.0):   # checkmate
+            weight = 2.0
+        elif outcome_code == 2.0:         # repetition draw
+            weight = 0.5
+        else:                             # stalemate/neutral
+            weight = 1.0
+
+        for i in range(len(X)):
+            self.buffer.append((X[i], y[i], weight))
+
+    def sample(self, batch_size):
+        if len(self.buffer) < batch_size:
+            return None, None, None
+
+        # Normalize weights for probability sampling
+        weights = np.array([w for _, _, w in self.buffer], dtype=np.float32)
+        probs = weights / np.sum(weights)
+        indices = np.random.choice(len(self.buffer), batch_size, p=probs)
+
+        batch = [self.buffer[idx] for idx in indices]
+        batch_X = np.stack([b[0] for b in batch])
+        batch_y = np.array([b[1] for b in batch])
+        batch_w = np.array([b[2] for b in batch])
+        return batch_X, batch_y, batch_w
+
+    def save(self):
+        if len(self.buffer) == 0:
+            return
+        X_arr = np.stack([x for x, _, _ in self.buffer])
+        y_arr = np.array([y for _, y, _ in self.buffer])
+        w_arr = np.array([w for _, _, w in self.buffer])
+        np.savez_compressed(REPLAY_FILE, X=X_arr, y=y_arr, w=w_arr)
+        print(f"💾 Saved replay buffer ({len(self.buffer)} samples) → {REPLAY_FILE}")
+
+    def load(self):
+        if not os.path.exists(REPLAY_FILE):
+            print("🆕 No replay buffer found — starting empty.")
+            return
+        data = np.load(REPLAY_FILE, allow_pickle=True)
+        X, y, w = data["X"], data["y"], data["w"]
+        for i in range(len(X)):
+            self.buffer.append((X[i], y[i], w[i]))
+        print(f"📂 Loaded replay buffer with {len(self.buffer)} samples from {REPLAY_FILE}")
+
+# ----------------------------
+# 🧩 Helper Function
 # ----------------------------
 def apply_discounted_rewards(final_outcome, num_positions, gamma=0.98):
-    """
-    Calculates discounted rewards for each position in a game.
-    """
     discounted_y = np.zeros(num_positions)
     for i in range(num_positions):
         moves_from_end = num_positions - 1 - i
@@ -98,7 +146,7 @@ if __name__ == "__main__":
     onnx_path = "value_net.onnx"
     net = ValueNetwork().to(device)
 
-    # 1️⃣ Load existing model if available
+    # 1️⃣ Load model
     if os.path.exists(model_path):
         try:
             state_dict = torch.load(model_path, map_location=device, weights_only=True)
@@ -106,80 +154,84 @@ if __name__ == "__main__":
             print(f"✅ Loaded existing weights from {model_path}")
         except Exception as e:
             print(f"⚠️ Failed to load {model_path}: {e}")
-            print("🧠 Starting with a new model.")
     else:
         print(f"⚠️ No {model_path} found — starting fresh model.")
 
-    # 2️⃣ Export ONNX only if missing
-    dummy_input = torch.randn(1, 8, 8, 12).to(device)
+    # 2️⃣ Load replay buffer
+    replay_buffer = ReplayBuffer()
+    replay_buffer.load()
+    y_values = [y for _, y, _ in replay_buffer.buffer]
+    #print(f"Mean label: {np.mean(y_values):.3f}, Std: {np.std(y_values):.3f}")
+    #print(f"Label distribution: {np.unique(np.sign(y_values), return_counts=True)}")
+
+
+    # 3️⃣ Export ONNX if missing
+    dummy_input = torch.randn(1, 12, 8, 8).to(device)
     if not os.path.exists(onnx_path):
-        print("📦 ONNX model not found — exporting initial version...")
+        print("📦 Exporting initial ONNX model...")
         torch.onnx.export(
-            net,
-            dummy_input,
-            onnx_path,
-            input_names=["input"],
-            output_names=["output"],
-            opset_version=17,
-            dynamic_axes={"input": {0: "batch_size"}}
+            net, dummy_input, onnx_path,
+            input_names=["input"], output_names=["output"],
+            opset_version=17, dynamic_axes={"input": {0: "batch_size"}}
         )
         print(f"✅ ONNX model created at {onnx_path}")
-    else:
-        print(f"✅ Found existing ONNX model at {onnx_path} — skipping export.")
 
-    # 3️⃣ Self-play training loop
-    total_games = 10000
-    save_every = 1
+    # 4️⃣ Self-play training loop
+    total_games = 10_000
+    save_every = 5
     depth = 1
+    batch_size = 781
     start = time.time()
-    checkmates = 0
-    stalemates = 0
-    repetitions = 0
+
+    wcheckmates = bcheckmates = stalemates = repetitions = 0
 
     for game_num in range(1, total_games + 1):
         print(f"\n🎮 Game {game_num}/{total_games}")
-
-        # 1. Run self-play game
         X, y_raw = chessbridge.run_selfplay_for_python(depth, False)
         X = np.array(X)
         game_outcome_code = y_raw[0]
+        print(f"🔚 Game outcome code: {game_outcome_code}")
 
-        # 2. Track stats and determine final outcome
-        if game_outcome_code == 1.0 or game_outcome_code == -1.0:
-            checkmates += 1
+        # Track stats
+        if game_outcome_code == 1.0:
+            wcheckmates += 1
+            final_outcome = game_outcome_code
+        elif game_outcome_code == -1.0:
+            bcheckmates += 1
             final_outcome = game_outcome_code
         elif game_outcome_code == 0.0:
             stalemates += 1
             final_outcome = 0.0
-        elif game_outcome_code == 2.0:
+        else:
             repetitions += 1
             final_outcome = 0.0
 
-        repetition_mask = (game_outcome_code == 2.0)
-
-        # 3. Apply discounted rewards to create the new labels
+        # Compute discounted rewards
         y = apply_discounted_rewards(final_outcome, len(X))
-        print(f"🧩 X shape: {X.shape}, y shape: {y.shape}, first label: {y[0]:.3f}, last label: {y[-1]:.3f}")
 
-        # 4. Train model with new labels
-        net.train_model(X, y, epochs=1, batch_size=32, repetition_mask=repetition_mask)
+        # ✅ Add to replay buffer
+        replay_buffer.add(X, y, game_outcome_code)
+        print(f"📈 Replay buffer size: {len(replay_buffer.buffer)} / {REPLAY_MAXLEN}")
 
-        # 5. Periodic save
+
+        # 💾 Save periodically
         if game_num % save_every == 0:
+            # 🧠 Train using weighted sampling
+            batch_X, batch_y, batch_w = replay_buffer.sample(batch_size)
+            if batch_X is not None:
+                # optional: scale loss by sample weights
+                net.train_model(batch_X, batch_y, epochs=1, batch_size=batch_size)
             net.save(model_path)
+            replay_buffer.save()
             print("📦 Re-exporting updated ONNX model...")
             torch.onnx.export(
-                net,
-                dummy_input,
-                onnx_path,
-                input_names=["input"],
-                output_names=["output"],
-                opset_version=17,
-                dynamic_axes={"input": {0: "batch_size"}}
+                net, dummy_input, onnx_path,
+                input_names=["input"], output_names=["output"],
+                opset_version=17, dynamic_axes={"input": {0: "batch_size"}}
             )
             print(f"✅ Updated ONNX model saved at {onnx_path}")
 
     elapsed = time.time() - start
     print(f"\n✅ Finished {total_games} games in {elapsed:.2f}s")
-    print(f"🏁 Final ONNX model ready at {onnx_path}")
-    print(f"📊 Game Outcomes — Checkmates: {checkmates}, Stalemates: {stalemates}, Repetitions: {repetitions}")
+    print(f"📊 White Checkmates: {wcheckmates}, Black Checkmates: {bcheckmates}, Stalemates: {stalemates}, Repetitions: {repetitions}")
+

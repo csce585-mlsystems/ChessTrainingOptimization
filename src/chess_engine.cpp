@@ -357,39 +357,46 @@ std::string Position::pretty() const {
 #include <vector>
 
 std::vector<float> Position::toTensor() const {
-    std::vector<float> tensor(8 * 8 * 12, 0.0f);
+    // ✅ If already computed, return cached data
+    if (!tensorData.empty()) 
+        return tensorData;
 
-    // 1️⃣ Encode piece positions using bitboards
-    for (int channel = 0; channel < 12; ++channel) {
-        Bitboard bb = this->bb[channel];
+    // NCHW layout: 12 channels × 8 rows × 8 cols
+    std::vector<float> tensor(12 * 8 * 8, 0.0f);
+
+    // 1️⃣ Encode piece bitboards into 12 channels
+    for (int ch = 0; ch < 12; ++ch) {
+        Bitboard bb = this->bb[ch];
         for (int sq = 0; sq < 64; ++sq) {
             if ((bb >> sq) & 1ULL) {
                 int rank = sq / 8;
                 int file = sq % 8;
-                int idx = (rank * 8 + file) * 12 + channel;
+                int idx = ch * 64 + rank * 8 + file;  // channel-first index
                 tensor[idx] = 1.0f;
             }
         }
     }
 
-    // 2️⃣ Optionally encode side to move
+    // 2️⃣ Encode side-to-move as bias
     float stm_bias = whiteToMove ? 0.05f : -0.05f;
     for (float& v : tensor) v += stm_bias;
 
-    // 3️⃣ Optionally encode castling rights as small global bias
+    // 3️⃣ Encode castling rights
     if (castlingRights & WK_CASTLE_MASK) tensor[0] += 0.02f;
     if (castlingRights & WQ_CASTLE_MASK) tensor[1] += 0.02f;
     if (castlingRights & BK_CASTLE_MASK) tensor[2] += 0.02f;
     if (castlingRights & BQ_CASTLE_MASK) tensor[3] += 0.02f;
 
-    // 4️⃣ Optionally encode en passant square
+    // 4️⃣ Encode en-passant square
     if (epSquare >= 0 && epSquare < 64) {
         int rank = epSquare / 8;
         int file = epSquare % 8;
-        int idx = (rank * 8 + file) * 12 + 0; // use channel 0 for EP
+        int idx = 0 * 64 + rank * 8 + file;  // channel 0 for EP
         tensor[idx] += 0.05f;
     }
 
+    // ✅ Cache and return
+    this->tensorData = tensor;
     return tensor;
 }
 
@@ -425,7 +432,7 @@ bool Engine::loadModel(const std::string& path) {
         session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
         // 🧠 Enable GPU (CUDA)
-        OrtSessionOptionsAppendExecutionProvider_CUDA(session_options, 0);
+        (void)OrtSessionOptionsAppendExecutionProvider_CUDA(session_options, 0);
 
         // Create session and store it as a class member
         this->onnx_session = std::make_unique<Ort::Session>(env, path.c_str(), session_options);
@@ -445,13 +452,15 @@ float Engine::evaluateWithModel(const Position& p) {
         return 0.0f;
     }
 
-    // 1️⃣ Convert position to tensor
-    std::vector<float> input_tensor_values = p.toTensor();
+    // ✅ Use cached tensor or compute it
+    std::vector<float> input_tensor_values = p.tensorData.empty()
+        ? p.toTensor()
+        : p.tensorData;
 
-    // 2️⃣ Input shape [1, 8, 8, 12]
-    std::array<int64_t, 4> input_shape{1, 8, 8, 12};
+    // 🧠 Input shape: [batch_size, channels, height, width] = [1,12,8,8]
+    std::array<int64_t, 4> input_shape{1, 12, 8, 8};
 
-    // 3️⃣ Create input tensor
+    // 3️⃣ Create ONNX input tensor
     Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
     Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
         memory_info,
@@ -473,11 +482,9 @@ float Engine::evaluateWithModel(const Position& p) {
         1
     );
 
-    // 5️⃣ Extract result
+    // 5️⃣ Extract scalar result
     float* output_data = output_tensors.front().GetTensorMutableData<float>();
-    float value = output_data[0];
-    //std::cout << "NN evaluation: " << value << std::endl;
-    return value;
+    return output_data[0];
 }
 
     
@@ -624,61 +631,103 @@ float Engine::evaluateWithModel(const Position& p) {
     }
     
 
-    Move Engine::findBestMove(Position& root_pos, const std::vector<uint64_t>& game_history_hashes){
-        nodes_visited_search = 0;
-        if (root_pos.currentHash == 0) root_pos.computeAndSetHash();
-        transposition_table.clear();
+Move Engine::findBestMove(Position& root_pos, const std::vector<uint64_t>& game_history_hashes) {
+    nodes_visited_search = 0;
+    if (root_pos.currentHash == 0) root_pos.computeAndSetHash();
+    transposition_table.clear();
 
-        Move overall_best_move = 0;
+    // ───────────────────────────────
+    // Configuration
+    // ───────────────────────────────
+    constexpr double EVAL_TOLERANCE = 20; // acceptable deviation from best move in evaluation units
+    constexpr int TOP_N = 3;               // consider top N moves for randomization
+    std::mt19937 rng(std::random_device{}()); // random number generator
 
-        for (int current_iter_depth = 1; current_iter_depth <= this->searchDepth; ++current_iter_depth){
-            std::vector<Move> root_moves;
-            generateMoves(root_pos, root_moves);
+    Move overall_best_move = 0;
+    int best_score = -INF - 1000;
+    std::vector<std::pair<Move, double>> root_move_scores;
 
-            if (root_moves.empty()) {
-                 return 0;
-            }
+    // ───────────────────────────────
+    // Iterative Deepening Loop
+    // ───────────────────────────────
+    for (int current_iter_depth = 1; current_iter_depth <= this->searchDepth; ++current_iter_depth) {
+        std::vector<Move> root_moves;
+        generateMoves(root_pos, root_moves);
+        if (root_moves.empty()) return 0;
 
-            // Move ordering for root moves: use best move from previous iteration
-            if (overall_best_move != 0) {
-                auto it = std::find(root_moves.begin(), root_moves.end(), overall_best_move);
-                if (it != root_moves.end() && it != root_moves.begin()) {
-                    std::rotate(root_moves.begin(), it, it + 1);
-                }
-            }
-
-            Move current_iter_best_root_move = 0;
-            int best_score_this_iter_at_root = -INF - 1000;
-            int alpha = -INF; // Initial alpha for root
-            int beta = INF;   // Initial beta for root
-
-
-            for(Move m : root_moves){
-                Position child_pos = root_pos;
-                applyMove(child_pos, m);
-
-                std::vector<uint64_t> search_path_history;
-                search_path_history.push_back(root_pos.currentHash);
-
-                int score_from_opponent_pov = negamax(child_pos, current_iter_depth - 1, -beta, -alpha, search_path_history, game_history_hashes, false);
-                int score_from_current_player_pov = -score_from_opponent_pov;
-
-                if(score_from_current_player_pov > best_score_this_iter_at_root){
-                    best_score_this_iter_at_root = score_from_current_player_pov;
-                    current_iter_best_root_move = m;
-                }
-
-                if (score_from_current_player_pov > alpha) {
-                    alpha = score_from_current_player_pov;
-                }
-            }
-
-            if (current_iter_best_root_move != 0) {
-                overall_best_move = current_iter_best_root_move;
+        // Reorder: prioritize best move from previous iteration
+        if (overall_best_move != 0) {
+            auto it = std::find(root_moves.begin(), root_moves.end(), overall_best_move);
+            if (it != root_moves.end() && it != root_moves.begin()) {
+                std::rotate(root_moves.begin(), it, it + 1);
             }
         }
-        return overall_best_move;
+
+        root_move_scores.clear();
+        best_score = -INF - 1000;
+        int alpha = -INF, beta = INF;
+
+        // ───────────────────────────────
+        // Evaluate Each Root Move
+        // ───────────────────────────────
+        for (Move m : root_moves) {
+            Position child_pos = root_pos;
+            applyMove(child_pos, m);
+
+            std::vector<uint64_t> search_path_history = { root_pos.currentHash };
+
+            int score_from_opponent_pov = negamax(child_pos, current_iter_depth - 1, -beta, -alpha, search_path_history, game_history_hashes, false);
+            int score_from_current_player_pov = -score_from_opponent_pov;
+
+            // Store move + evaluation
+            root_move_scores.emplace_back(m, static_cast<double>(score_from_current_player_pov));
+
+            if (score_from_current_player_pov > best_score) {
+                best_score = score_from_current_player_pov;
+                overall_best_move = m;
+            }
+
+            if (score_from_current_player_pov > alpha) alpha = score_from_current_player_pov;
+        }
+
+        // Sort root moves by descending score
+        std::sort(root_move_scores.begin(), root_move_scores.end(),
+                  [](const auto& a, const auto& b) { return a.second > b.second; });
     }
+
+    // ───────────────────────────────
+    // Randomized Selection Among Top Moves
+    // ───────────────────────────────
+    if (root_move_scores.empty()) return overall_best_move;
+
+    const double best_eval = root_move_scores.front().second;
+    std::vector<Move> eligible_moves;
+
+    for (size_t i = 0; i < root_move_scores.size() && i < TOP_N; ++i) {
+        double eval_diff = std::abs(root_move_scores[i].second - best_eval);
+        if (eval_diff <= EVAL_TOLERANCE) {
+            eligible_moves.push_back(root_move_scores[i].first);
+        }
+    }
+
+    if (eligible_moves.empty()) return overall_best_move;
+
+    std::uniform_int_distribution<size_t> dist(0, eligible_moves.size() - 1);
+    Move chosen_move = eligible_moves[dist(rng)];
+
+    // Optionally, print the ranked moves for debugging
+    /*
+    std::cout << "Root move ranking:\n";
+    for (size_t i = 0; i < root_move_scores.size(); ++i) {
+        std::cout << i + 1 << ". " << moveToString(root_move_scores[i].first)
+                  << " → eval: " << root_move_scores[i].second << "\n";
+    }
+    std::cout << "Chosen move: " << moveToString(chosen_move) << "\n";
+    */
+
+    return chosen_move;
+}
+
 
     Outcome Engine::currentOutcome(const Position& pos, const std::vector<uint64_t>& game_history_hashes) const {
         if (pos.halfmoveClock >= 100) {
@@ -981,28 +1030,30 @@ int Engine::negamax(Position& p, int remaining_depth, int alpha, int beta,
         }
     }
 
-    // --- Base Case: Leaf Node ---
-    // evaluation function call
-    if (remaining_depth <= 0) {
-        float eval = evaluateWithModel(p);
-        int score = static_cast<int>(eval * 1000); // scale float to int
-        //int eval = evaluateMaterial(p);
-        //return p.whiteToMove ? eval : -eval;
-        return score;
-    }
-
     // --- Move Generation ---
     std::vector<Move> moves;
     generateMoves(p, moves);
 
     // --- Base Case: No Legal Moves (Checkmate or Stalemate) ---
     if (moves.empty()) {
+        //std::cout << "No legal moves found at depth " << remaining_depth << "\n";
         int king_piece_idx = p.whiteToMove ? W_KING : B_KING;
         int king_sq = lsb_idx(p.bb[king_piece_idx]);
         if (isSquareAttacked(p, king_sq, !p.whiteToMove)) {
             return -INF + (this->searchDepth - remaining_depth); // Checkmate
         }
         return 0; // Stalemate
+    }
+
+        // --- Base Case: Leaf Node ---
+    // evaluation function call
+    if (remaining_depth <= 0) {
+        float eval = evaluateWithModel(p);
+        int score = static_cast<int>(eval * 1000); // scale float to int
+        return p.whiteToMove ? score : -score;
+        //int eval = evaluateMaterial(p);
+        //return p.whiteToMove ? eval : -eval;
+        //return score;
     }
 
     // --- Move Ordering ---
