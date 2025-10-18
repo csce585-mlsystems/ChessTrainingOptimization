@@ -20,29 +20,25 @@ print(f"🧠 Using device: {device}")
 class ValueNetwork(nn.Module):
     def __init__(self, lr=1e-3, input_channels=12):
         super(ValueNetwork, self).__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(input_channels, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(128, 256, kernel_size=3, padding=1),
-            nn.ReLU()
-        )
-        self.fc = nn.Sequential(
-            nn.Linear(8 * 8 * 256, 256),
+        
+        # 🧠 Replaced CNN layers with a single lightweight MLP
+        self.mlp = nn.Sequential(
+            nn.Linear(input_channels * 8 * 8, 256), # Input is flattened 12x8x8 board
             nn.ReLU(),
             nn.Linear(256, 64),
             nn.ReLU(),
             nn.Linear(64, 1),
             nn.Tanh()
         )
+        
+        # --- The rest of your init remains the same ---
         self.criterion = nn.MSELoss(reduction='none')
         self.optimizer = optim.Adam(self.parameters(), lr=lr)
 
     def forward(self, x):
-        x = self.conv(x)
+        # ♟️ Flatten the input tensor first, then pass to the MLP
         x = x.reshape(x.size(0), -1)
-        return self.fc(x)
+        return self.mlp(x)
 
     def train_model(self, X, y, epochs=1, batch_size=64):
         self.train()
@@ -63,8 +59,7 @@ class ValueNetwork(nn.Module):
                 self.optimizer.step()
                 total_loss += loss.item()
             print(f"🧮 Epoch {epoch+1}, Loss: {total_loss:.6f}")
-        
-
+    
     def save(self, path="model.pt"):
         torch.save(self.state_dict(), path)
         print(f"💾 Saved model weights to {path}")
@@ -177,10 +172,10 @@ if __name__ == "__main__":
         print(f"✅ ONNX model created at {onnx_path}")
 
     # 4️⃣ Self-play training loop
-    total_games = 10_000
+    total_games = 1160
     save_every = 5
-    depth = 1
-    batch_size = 781
+    depth = 3
+    batch_size = 1024
     start = time.time()
 
     wcheckmates = bcheckmates = stalemates = repetitions = 0

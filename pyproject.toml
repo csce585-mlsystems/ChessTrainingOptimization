@@ -1,0 +1,16 @@
+[project]
+name = "guided-chess-engine"
+version = "1.0.0"
+description = "Optimizing Chess Engine Training Efficiency via Guided Curriculum Self-Play"
+authors = [{ name = "Vito Spatafora", email = "vitos@email.sc.edu" }]
+
+dependencies = [
+    "torch",
+    "numpy",
+    "pybind11",
+    "onnxruntime",
+]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"

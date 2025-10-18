@@ -1048,11 +1048,11 @@ int Engine::negamax(Position& p, int remaining_depth, int alpha, int beta,
         // --- Base Case: Leaf Node ---
     // evaluation function call
     if (remaining_depth <= 0) {
-        float eval = evaluateWithModel(p);
-        int score = static_cast<int>(eval * 1000); // scale float to int
-        return p.whiteToMove ? score : -score;
-        //int eval = evaluateMaterial(p);
-        //return p.whiteToMove ? eval : -eval;
+        //float eval = evaluateWithModel(p);
+        //int score = static_cast<int>(eval * 1000); // scale float to int
+        //return p.whiteToMove ? score : -score;
+        int eval = evaluateMaterial(p);
+        return p.whiteToMove ? eval : -eval;
         //return score;
     }
 

@@ -1,0 +1,26 @@
+# Ignore Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+.env/
+
+# C++ build artifacts
+*.o
+*.so
+*.exe
+*.egg-info/
+onnxruntime/
+onnxruntime-linux-x64-gpu-*/
+
+# Large model / data files
+src/model.pt
+src/value_net.onnx
+src/replay_buffer_v2.npz
+
+# Logs
+*.log
