@@ -61,3 +61,22 @@ PyBind11 — for C++/Python interoperability
 ONNX Runtime — for running exported neural network models efficiently in C++
 
 CMake — for building the C++ engine and linking dependencies
+
+# Instructions for Milestone 1 Results:
+
+[1] Download Repository
+
+[2] Run uv sync
+
+[3] run cd src
+
+[4] run make clean
+
+[5] run make
+
+[6] open nn.py
+
+[7] set the following variables:
+total_games = 1000 save_every = 1 depth = 1
+
+[8] run nn.py
