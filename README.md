@@ -74,14 +74,21 @@ This project provides:
 
 Execute the following in the src directory:
 
-### 1. Build Stockfish (Self-Play Engine)
+### 0. Build Repo and sync dependencies
+```bash
+git clone https://github.com/csce585-mlsystems/ChessTrainingOptimization.git
+cd ChessTrainingOptimization
+cd src
+uv sync
+source .venv/bin/activate
+```
+### 1. Build Stockfish (Selfplay Engine)
 ```bash
 git clone --branch sf_16 https://github.com/official-stockfish/Stockfish.git stockfish_src
 cd stockfish_src/src
 make -j4 build ARCH=x86-64
 mv stockfish ../../stockfish
 cd ../..
-./stockfish
 ```
 
 ### 2. Build Nodchip Stockfish (Converter)
@@ -97,30 +104,23 @@ cd ../..
 ```bash
 git clone https://github.com/official-stockfish/nnue-pytorch.git
 cd nnue-pytorch
-python3.12 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-pip install python-chess
+cp ../fixed_train.py train.py
 chmod +x setup_script.sh
 ./setup_script.sh
-pip install cupy-cuda12x
 cd ..
 ```
 
 ---
 
 ## Instructions for Finished Project  
-
-### Phase 1: Initialize Version 0 Network  
 ```bash
-source nnue-pytorch/venv/bin/activate
 python init_version0.py
 ```
-
-### Phase 2: Begin Iterative Self-Play Training, Key hyper-parameters (Depth, Max Moves) and the experiment toggle (use_material_adjudication) can be modified directly at the top of selfplay_datagen.py.
 ```bash
 python selfplay_datagen.py
 ```
+
+
 
 The system then executes iterative reinforcement learning cycles consisting of:
 
@@ -151,3 +151,4 @@ The system then executes iterative reinforcement learning cycles consisting of:
 [6] Stockfish Development Team. https://stockfishchess.org/  
 [7] Henderson, P. et al. (2018). Deep Reinforcement Learning That Matters. AAAI.  
 [8] Elo, A. (1978). The Rating of Chessplayers, Past and Present.
+
