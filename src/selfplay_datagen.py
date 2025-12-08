@@ -35,7 +35,7 @@ MAX_MOVES = 70
 use_material_adjudication = True 
 MAX_MOVES_BENCHMARK = 250
 NUM_GAMES_PER_ITER = 100          # used when SELFPLAY_MODE = "games"
-SELFPLAY_TIME_PER_ITER_SEC = 600  # used when SELFPLAY_MODE = "time" (e.g. 10 minutes)
+SELFPLAY_TIME_PER_ITER_SEC = 30  # used when SELFPLAY_MODE = "time" (e.g. 10 minutes)
 
 # SELFPLAY_MODE: "games" (original behavior) or "time"
 SELFPLAY_MODE = "time"
