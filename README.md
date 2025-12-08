@@ -1,82 +1,153 @@
-
 # Optimizing Chess Engine Training Efficiency via Guided Curriculum Self-Play  
 
 ## Group Info  
 - Vito Spatafora  
-- Email: vitos@email.sc.edu  
+- Email: vitos@email.sc.edu 
 
-## Project Summary/Abstract  
-### This project presents a hybrid chess engine and reinforcement learning framework designed to investigate training efficiency through guided curriculum self-play. The system integrates a C++ engine—responsible for move generation, rule enforcement, and alpha-beta search—with a Python-based training loop that manages self-play orchestration, neural network evaluation, and data collection. A PyTorch evaluation model is exported to ONNX for fast inference within the engine, enabling seamless interaction via PyBind11. The research introduces a novel curriculum-based training approach that incrementally increases game length to accelerate early learning and reduce energy consumption.
+## Overview  
+This project implements a fully automated pipeline for training Neural Network Updatable Evaluations (NNUE) for chess engines. The system explores whether curriculum-style reinforcement learning can accelerate convergence and improve efficiency when compared to conventional unguided self-play.
 
-## Problem Description  
-- Problem description: Modern chess engines like Stockfish and Leela Chess Zero have achieved superhuman strength, but this success comes with an enormous computational and energy cost. Training these engines from scratch requires playing millions of full games, where early moves are often random and uninformative—wasting computation while the model slowly discovers basic patterns.  
+The framework integrates three key components:
 
-- Motivation  
-  - As AI systems scale, the inefficiency of current training methods becomes increasingly unsustainable.  
-  - Reducing the energy cost of training can accelerate AI innovation while lowering its environmental impact.  
-  - This project proposes a curriculum-based strategy to improve early learning efficiency, reducing convergence time and energy consumption without sacrificing final playing strength.  
+1. **Stockfish 16 (Player):** Generates self-play games using the current network.
+2. **Nodchip Stockfish (Converter):** Converts plain text training data into `.binpack` format for NNUE training.
+3. **NNUE-PyTorch (Trainer):** Trains the neural network on GPU using official Stockfish tooling.
 
-- Challenges  
-  - The primary challenges include model collapse and insufficient training performance.  
-  - The network cannot currently train at sufficiently high search depths due to computational inefficiencies, resulting in poor-quality training data.  
-  - The deterministic behavior of the model combined with limited data quality leads to repeated game sequences, producing a high number of draws by repetition.  
+The pipeline repeatedly plays games, collects training examples, updates the evaluation network, and benchmarks progress across iterations.
+
+---
+
+## Research Motivation  
+Modern chess engines reach superhuman performance but require tremendous computational and energy expenditure. Early game phases during training provide limited learning signal, leading to wasted resources.
+
+This project investigates whether guided curriculum self-play can:
+
+* Improve learning efficiency of nnue training from scratch
+* Maintain or improve resulting playing strength
+
+The curriculum approach constrains game length during early iterations and bases outcomes on material balance, distilling simple strategic principles before exposing the model to full gameplay complexity.
+
+---
+
+## Problem Statement  
+
+Current reinforcement learning strategies rely on millions of long self-play games. Early positions contain little information, making training slow and inefficient. The challenge addressed here is:
+
+**Can a staged training curriculum accelerate early learning and improve efficiency without degrading final chess strength?**
+
+Key difficulties include:
+
+* Preventing model collapse during small-game learning
+* Ensuring high-quality training data across search depths
+* Avoiding deterministic repetition loops caused by the engine and network interaction
+
+---
 
 ## Contribution  
 ### [`Novel contribution`]
-- Propose and implement a guided curriculum self-play framework for chess engine training, introducing a structured progression of training phases rather than relying on conventional unguided, full-game self-play.
-- Develop two neural network evaluation functions within the same chess engine framework:  
-  - **Baseline (Unguided):** Trained via full-game self-play from the beginning.  
-  - **Guided (Curriculum):** Trained on progressively longer games (e.g., 10–20 moves per side).  
-- Measure and compare the training efficiency of both approaches in terms of energy consumption (kWh) and convergence rate (Elo improvement over time).  
-- Analyze the final Elo strength per unit of energy consumed to determine if the curriculum approach provides a more efficient training method.  
+This project provides:
 
+* A complete NNUE reinforcement learning loop using Stockfish, data conversion tools, and GPU-accelerated training.
+* A side-by-side evaluation of:
+  * **Baseline Training:** Full game self-play from iteration zero
+  * **Curriculum Training:** Artificial game truncation with adjudication by material evaluation
+* A monitoring mechanism to compare convergence speed, Elo growth, and iteration
+* Empirical insight into whether human-style instructional scaffolding improves machine learning dynamics in chess
+
+---
+
+## System Architecture  
+
+### Core Components  
+1. **Stockfish 16**  
+   Self-play engine providing move selection, search, and NNUE inference.
+
+2. **Nodchip Stockfish**  
+   Required to convert `.plain` training files into `.binpack` format for NNUE-PyTorch.
+
+3. **NNUE-PyTorch**  
+   Training backend with GPU acceleration used to update the neural network each iteration.
+
+---
+
+## Installation and Setup  
+
+Execute the following in the src directory:
+
+### 1. Build Stockfish (Self-Play Engine)
+```bash
+git clone --branch sf_16 https://github.com/official-stockfish/Stockfish.git stockfish_src
+cd stockfish_src/src
+make -j4 build ARCH=x86-64
+mv stockfish ../../stockfish
+cd ../..
+./stockfish
+```
+
+### 2. Build Nodchip Stockfish (Converter)
+```bash
+git clone https://github.com/nodchip/Stockfish.git nstockfish_src
+cd nstockfish_src/src
+make -j4 build ARCH=x86-64
+mv stockfish ../../nstockfish
+cd ../..
+```
+
+### 3. Setup NNUE-PyTorch Trainer
+```bash
+git clone https://github.com/official-stockfish/nnue-pytorch.git
+cd nnue-pytorch
+python3.12 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+pip install python-chess
+chmod +x setup_script.sh
+./setup_script.sh
+pip install cupy-cuda12x
+cd ..
+```
+
+---
+
+## Instructions for Finished Project  
+
+### Phase 1: Initialize Version 0 Network  
+```bash
+source nnue-pytorch/venv/bin/activate
+python init_version0.py
+```
+
+### Phase 2: Begin Iterative Self-Play Training, Key hyper-parameters (Depth, Max Moves) and the experiment toggle (use_material_adjudication) can be modified directly at the top of selfplay_datagen.py.
+```bash
+python selfplay_datagen.py
+```
+
+The system then executes iterative reinforcement learning cycles consisting of:
+
+1. Self-play data generation  
+2. Conversion to binpack  
+3. NNUE training  
+4. Benchmarking versus previous and baseline networks  
+5. Version logging and model selection  
+
+---
+
+## Dependencies  
+
+* Python 3.12+
+* PyTorch (GPU recommended)
+* NumPy  
+* CMake
+
+---
 
 ## References  
-[1] Bengio, Y., Louradour, J., Collobert, R., & Weston, J. (2009). *Curriculum learning.* In Proceedings of the 26th Annual International Conference on Machine Learning (pp. 41–48).  
 
-[2] Schaul, T., Quan, J., Antonoglou, I., & Silver, D. (2015). *Prioritized experience replay.* arXiv preprint arXiv:1511.05952.  
-
-[3] Nasu, Y. (2018). *Efficiently Updatable Neural-Network-based Evaluation Function for computer Shogi.* Ziosoft Computer Shogi Club.  
-
-[4] Silver, D. et al. (2017). *Mastering Chess and Shogi by Self-Play with a General Reinforcement Learning Algorithm.* arXiv.  
-
-[5] Linscott, J. et al. (n.d.). *Leela Chess Zero.* https://lczero.org/  
-
-[6] Stockfish Development Team. (n.d.). *Stockfish Chess Engine.* https://stockfishchess.org/  
-
-[7] Henderson, P. et al. (2018). *Deep Reinforcement Learning That Matters.* AAAI.  
-
-[8] Elo, A. E. (1978). *The Rating of Chessplayers, Past and Present.* Arco Publishing.  
-
-# Dependencies
-
-Python 3.12+
-
-PyTorch — for neural network training and inference
-
-NumPy — for numerical operations and array management
-
-PyBind11 — for C++/Python interoperability
-
-ONNX Runtime — for running exported neural network models efficiently in C++
-
-CMake — for building the C++ engine and linking dependencies
-
-# Instructions for Milestone 1 Results:
-
-[1] Download Repository
-
-[2] Run uv sync
-
-[3] run cd src
-
-[4] run make clean
-
-[5] run make
-
-[6] open nn.py
-
-[7] set the following variables:
-total_games = 1000 save_every = 1 depth = 1
-
-[8] run nn.py
+[1] Bengio, Y. et al. (2009). Curriculum Learning. ICML.  
+[2] Schaul, T. et al. (2015). Prioritized Experience Replay. arXiv.  
+[3] Nasu, Y. (2018). Efficiently Updatable Neural-Network-based Evaluation Function.  
+[4] Silver, D. et al. (2017). Mastering Chess and Shogi by Self-Play. arXiv.  
+[5] Leela Chess Zero Project. https://lczero.org/  
+[6] Stockfish Development Team. https://stockfishchess.org/  
+[7] Henderson, P. et al. (2018). Deep Reinforcement Learning That Matters. AAAI.  
+[8] Elo, A. (1978). The Rating of Chessplayers, Past and Present.
